@@ -39,29 +39,46 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
 
 llm = init_chat_model("google_genai:gemini-2.0-flash")
-analyzer_tools = []
 card_generator_tools = []
+card_creator_tools = []
 
+card_generator_prompt = """
+Você é um agente que cria flashcards estilo anki com base em pontos chave.
 
-analyzer_agent = create_react_agent(
-    model = llm,
-    tools = analyzer_tools,
-    prompt = "Você é um agente que analiza pdfs e extrai ideias chaves"
-)
+FORMATO OBRIGATÓRIO: Retorne APENAS um JSON válido no seguinte formato:
+[
+  {
+    "frente": "Pergunta do flashcard",
+    "verso": "Resposta do flashcard"
+  },
+  {
+    "frente": "Segunda pergunta",
+    "verso": "Segunda resposta"
+  }
+]
+
+- Crie entre 3-5 flashcards por texto
+- Seja conciso e claro
+- Use apenas JSON válido, sem texto adicional
+"""
 
 card_generator_agent = create_react_agent(
     model = llm,
     tools = card_generator_tools,
-    prompt = "Você é um agente que cria flashcards estilo anki com base em pontos chave"
+    prompt = card_generator_prompt
+)
+
+card_creator_agent = create_react_agent(
+    model = llm,
+    tools = card_creator_tools,
+    prompt = "Você é um agente que salva flashcards no banco de dados"
 )
 
 workflow = StateGraph(State)
 
-workflow.add_node("analyzer_agent", analyzer_agent)
 workflow.add_node("card_generator_agent", card_generator_agent)
 
-workflow.add_edge(START, "analyzer_agent")
-workflow.add_edge("analyzer_agent", "card_generator_agent")
+workflow.add_edge(START, "card_generator_agent")
 
 graph = workflow.compile()
 
@@ -76,12 +93,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/upload-pdf/")
+@app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...)):
-    content = await file.read()
-    buffer = BytesIO(content)
+    prompt = "analize o texto e extraia 5 pontos chave"
+    try:
+        content = await file.read()
+        buffer = BytesIO(content)
 
-    text = pdf_extract(buffer)
-    return text
+        text = pdf_extract(buffer)
 
+        message = f"""
+        Text:
+        {text}
+
+        Instruction:
+        {prompt}
+        """
+
+        messages = [HumanMessage(content=message)]
+
+        result = graph.invoke({"messages": messages})
+        response = result["messages"][-1].content
+
+        print("jorge" + response)
+
+        return{
+            "success": True,
+            "response": response
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
 
