@@ -2,6 +2,8 @@ langgraph
 langgraph[cli]
 langchain
 langchain-google-genai
+pyPDF2
+python-multipart
 python-dotenv
 typing-extensions
 pydantic
