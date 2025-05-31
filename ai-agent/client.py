@@ -35,50 +35,80 @@ def pdf_extract(pdf: BinaryIO) -> str:
     return complete_text
 
 
+
+@tool
+def add_flash_card(title, question, answer):
+    """cria título, pergunta e resposta para um flashcard e depois o adiciona no banco de dados"""
+    url = "http://backend:3001/flashcards"
+    data= {"title": title, "question": question, "answer": answer}
+    try:
+        response = requests.post(url, json=data, timeout=5)
+        response.raise_for_status()
+        return "Flashcard successfully created!"
+    except requests.exceptions.RequestException as e:
+        return f"Error creating flashcard: {str(e)}"
+
 class State(TypedDict):
     messages: Annotated[list, add_messages]
 
 llm = init_chat_model("google_genai:gemini-2.0-flash")
-card_generator_tools = []
-card_creator_tools = []
+tools = [add_flash_card]
 
-card_generator_prompt = """
-Você é um agente que cria flashcards estilo anki com base em pontos chave.
+prompt = """
+Você é um especialista em educação que cria flashcards de alta qualidade para estudo e memorização.
 
-FORMATO OBRIGATÓRIO: Retorne APENAS um JSON válido no seguinte formato:
-[
-  {
-    "frente": "Pergunta do flashcard",
-    "verso": "Resposta do flashcard"
-  },
-  {
-    "frente": "Segunda pergunta",
-    "verso": "Segunda resposta"
-  }
-]
+**Sua missão:**
+1. Analise cuidadosamente o texto acadêmico fornecido
+2. Identifique os conceitos, definições, fatos e relações mais importantes
+3. Crie entre 5-15 flashcards (dependendo da densidade do conteúdo)
+4. Para cada flashcard, use a ferramenta add_flash_card com:
+   - title: "Flashcard [número] - [tópico principal]"
+   - question: Pergunta clara e específica que teste o conhecimento
+   - answer: Resposta completa mas concisa, incluindo contexto quando necessário
 
-- Crie entre 3-5 flashcards por texto
-- Seja conciso e claro
-- Use apenas JSON válido, sem texto adicional
+**Diretrizes para flashcards de qualidade:**
+- Perguntas devem ser claras e sem ambiguidade
+- Respostas devem ser precisas e completas
+- Foque em conceitos fundamentais, não detalhes triviais
+- Varie o tipo de pergunta (definições, exemplos, relações, aplicações)
+- Mantenha consistência no nível de dificuldade
+
+**Tipos de pergunta recomendados:**
+- Definições: "O que é...?" / "Defina..."
+- Exemplos: "Dê um exemplo de..." / "Cite casos onde..."
+- Relações: "Qual a diferença entre X e Y?" / "Como X se relaciona com Y?"
+- Aplicações: "Como aplicar...?" / "Quando usar...?"
+- Causas/Efeitos: "Por que...?" / "Qual o resultado de...?"
+
+**Processo:**
+1. Leia todo o texto para entender o contexto geral
+2. Identifique os tópicos principais e subtópicos
+3. Para cada conceito importante, crie um flashcard
+4. Use add_flash_card uma vez para cada flashcard
+5. Conte quantos flashcards foram criados com sucesso
+6. Forneça um resumo final: "Criados X flashcards com sucesso sobre [tópicos principais]"
+
+**Importante:** 
+- Processe TODOS os flashcards identificados
+- NÃO pule nenhum flashcard
+- Mantenha controle de sucessos e falhas
+- Seja consistente na numeração dos flashcards
+
+Comece sua análise agora!
 """
-
-card_generator_agent = create_react_agent(
-    model = llm,
-    tools = card_generator_tools,
-    prompt = card_generator_prompt
-)
 
 card_creator_agent = create_react_agent(
     model = llm,
-    tools = card_creator_tools,
-    prompt = "Você é um agente que salva flashcards no banco de dados"
+    tools = tools,
+    prompt = prompt
 )
 
 workflow = StateGraph(State)
 
-workflow.add_node("card_generator_agent", card_generator_agent)
+workflow.add_node("card_creator_agent", card_creator_agent)
 
-workflow.add_edge(START, "card_generator_agent")
+workflow.add_edge(START, "card_creator_agent")
+workflow.add_edge("card_creator_agent", END)
 
 graph = workflow.compile()
 
@@ -95,7 +125,6 @@ app.add_middleware(
 
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...)):
-    prompt = "analize o texto e extraia 5 pontos chave"
     try:
         content = await file.read()
         buffer = BytesIO(content)
@@ -103,11 +132,13 @@ async def upload_pdf(file: UploadFile = File(...)):
         text = pdf_extract(buffer)
 
         message = f"""
-        Text:
-        {text}
+        Texto acadêmico para análise e criação de flashcards:
 
-        Instruction:
-        {prompt}
+        --- INÍCIO DO CONTEÚDO ---
+        {text}
+        --- FIM DO CONTEÚDO ---
+
+        Instrução: Analise este conteúdo e crie flashcards educacionais de alta qualidade seguindo todas as diretrizes estabelecidas.
         """
 
         messages = [HumanMessage(content=message)]
@@ -115,15 +146,13 @@ async def upload_pdf(file: UploadFile = File(...)):
         result = graph.invoke({"messages": messages})
         response = result["messages"][-1].content
 
-        print("jorge" + response)
-
         return{
             "success": True,
-            "response": response
+            "response": response,
+            "filename": file.filename
         }
     except Exception as e:
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": str(e)}
         )
-
