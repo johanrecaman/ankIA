@@ -10,6 +10,22 @@ export const getFlashcards = async (_, res) => {
   })
 }
 
+export const getFlashcardById = async (req, res) => {
+  const { id } = req.params;
+
+  const sql = 'SELECT * FROM flashcards WHERE id = ?';
+  db.get(sql, [id], (err, flashcard) => {
+    if (err) {
+      return res.status(500).json({ error: "Erro ao buscar flashcard" });
+    }
+    if (!flashcard) {
+      return res.status(404).json({ error: "Flashcard não encontrado" });
+    }
+    return res.json(flashcard);
+  });
+}
+
+
 export const createFlashcard = async (req, res) => {
   const {title, question, answer} = req.body;
 
