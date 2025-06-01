@@ -7,6 +7,7 @@ from typing import Annotated, BinaryIO
 from typing_extensions import TypedDict
 
 from io import BytesIO
+from pydantic import BaseModel, Field
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
@@ -65,6 +66,11 @@ def get_flashcard(flashcard_id):
     except requests.exceptions.RequestException as e:
         return f"Error fetching flashcard: {str(e)}"
 
+class FlashcardCheck(BaseModel):
+    status: str = Field(description="Status da avaliação: 'correto', 'parcial' ou 'incorreto'")
+    feedback: str = Field(description="Feedback educacional para o usuário")
+    official_answer: str = Field(description="Resposta oficial do flashcard")
+
 class State(TypedDict):
     messages: Annotated[list, add_messages]
 
@@ -119,43 +125,48 @@ Comece sua análise agora!
 check_prompt = """
 Você é um avaliador educacional de flashcards.
 
-**PROCESSO:**
-1. Use get_flashcard para buscar a pergunta e resposta oficial
-2. Compare a resposta do usuário com a oficial
-3. Retorne feedback em JSON
+**PROCESSO OBRIGATÓRIO:**
+1. SEMPRE use get_flashcard primeiro para buscar os dados do flashcard
+2. Use EXATAMENTE a resposta oficial retornada pela ferramenta
+3. Compare a resposta do usuário com a resposta oficial REAL
+4. Retorne o JSON com a resposta oficial EXATA da ferramenta
 
 **AVALIAÇÃO:**
 - **CORRETO**: Expressa a mesma ideia, aceita sinônimos, paráfrases e linguagem coloquial
 - **PARCIAL**: Conceito básico correto mas incompleto ou impreciso  
 - **INCORRETO**: Conceito errado, informação falsa ou resposta irrelevante
 
-**EXEMPLO:**
-Pergunta: "O que é fotossíntese?"
-Oficial: "Processo onde plantas convertem luz solar em energia"
-✅ Usuário: "Plantas usam luz do sol pra fazer energia" → CORRETO
-🔶 Usuário: "Plantas fazem energia" → PARCIAL (faltou mencionar luz solar)
-❌ Usuário: "É a respiração das plantas" → INCORRETO
-
 **FORMATO JSON OBRIGATÓRIO:**
 {
   "status": "correto"/"parcial"/"incorreto",
   "feedback": "mensagem encorajadora para o usuário",
-  "official_answer": "resposta oficial para referência"
+  "official_answer": "COPIE EXATAMENTE a resposta oficial da ferramenta get_flashcard"
 }
+
+**REGRAS CRÍTICAS:**
+- NUNCA invente ou modifique a resposta oficial
+- Use SOMENTE a resposta retornada por get_flashcard
+- O campo "official_answer" deve ser IDÊNTICO ao "answer" da ferramenta
+- NÃO use exemplos genéricos como "fotossíntese"
 
 **FEEDBACK:**
 - Correto: Elogie e reforce
 - Parcial: Reconheça o acerto e oriente sobre o que falta
-- Incorreto: Seja gentil, explique o erro e dê dicas
+- Incorreto: Seja gentil, explique o erro baseado na resposta REAL
 
-Sempre seja educativo e encorajador. Comece a avaliação!
+SEMPRE busque o flashcard primeiro! Comece a avaliação!
 """
 
 card_creator_agent = create_react_agent(
-    model=llm, tools=card_creator_tools, prompt=card_creator_prompt
+    model=llm,
+    tools=card_creator_tools, 
+    prompt=card_creator_prompt
 )
 
-check_agent = create_react_agent(model=llm, tools=check_tools, prompt=check_prompt)
+check_agent = create_react_agent(
+    model=llm,
+    tools=check_tools,
+    prompt=check_prompt)
 
 card_creator_workflow = StateGraph(State)
 card_creator_workflow.add_node("card_creator_agent", card_creator_agent)
@@ -232,6 +243,10 @@ async def check_answer(flashcard_id: int = Form(...), user_answer: str = Form(..
         result = check_graph.invoke({"messages": messages})
         response = result["messages"][-1].content.strip()
 
+        # Remove blocos de código markdown se existirem
+        if response.startswith("```"):
+            response = response.replace("```json", "").replace("```", "").strip()
+
         try:
             check_result = json.loads(response)
             return check_result
@@ -255,4 +270,3 @@ async def check_answer(flashcard_id: int = Form(...), user_answer: str = Form(..
                 "official_answer": "Não disponível"
             }
         )
-
